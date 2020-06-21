@@ -1,0 +1,9 @@
+#!/bin/sh
+set -ex
+go mod tidy
+git add go.*
+go vet
+go test -race
+errcheck
+staticcheck
+cmp pre-commit $0

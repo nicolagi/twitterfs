@@ -1,0 +1,8 @@
+github.com/kurrik/oauth1a v0.0.0-20151019171716-cb1b80e32dd4 h1:hGX8e8fDuWmCOQEneaHtuiqiy1NsBnZW2G6lxitngus=
+github.com/kurrik/oauth1a v0.0.0-20151019171716-cb1b80e32dd4/go.mod h1:8buhLMuecANgNgxrsQynWlNt03oXr1B/v2xbuRSrnEc=
+github.com/kurrik/twittergo v0.0.0-20190804010542-25ed642452e5 h1:2OHWQzMsoV/D14Mi+GPx5k82AGsNjymqK/dndop88c0=
+github.com/kurrik/twittergo v0.0.0-20190804010542-25ed642452e5/go.mod h1:8LXjN6yItBbjlBtxMRLCfWK46yaoqRignovBZnyTiQ4=
+github.com/lionkov/go9p v0.0.0-20190125202718-b4200817c487 h1:jmumGkeBN64JTR+Q4A6/Ed+tCGKZjQxyvbji3YyNF0E=
+github.com/lionkov/go9p v0.0.0-20190125202718-b4200817c487/go.mod h1:Nbrxd4FljESFB/bUvzT5xm1VNO2VfzMKSIv4L++4J4U=
+github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

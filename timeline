@@ -1,0 +1,7 @@
+#!/bin/rc
+# Example script to view a timeline middle-clicking on it on an acme
+# window for a Twitter user directory, e.g., /n/twitter/usenix.
+for (tweet in `{ ls -t | grep '^[0-9]+$' }) {
+	echo ---------
+	cat $tweet
+}
