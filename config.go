@@ -16,6 +16,7 @@ type fsConfig struct {
 	AccessToken       string `json:"access_token"`
 	AccessTokenSecret string `json:"access_token_secret"`
 	ScreenName        string `json:"screen_name"`
+	ListenAddress     string `json:"listen_address"`
 }
 
 func loadDefaultConfig() (*fsConfig, error) {
@@ -35,6 +36,9 @@ func loadDefaultConfig() (*fsConfig, error) {
 	var config fsConfig
 	if err := json.NewDecoder(f).Decode(&config); err != nil {
 		return nil, errors.WithStack(err)
+	}
+	if config.ListenAddress == "" {
+		config.ListenAddress = "localhost:7731"
 	}
 	return &config, nil
 }

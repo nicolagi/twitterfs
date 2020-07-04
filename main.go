@@ -292,7 +292,7 @@ func main() {
 	//s.Debuglevel = srv.DbgPrintFcalls
 	s.Id = "twitter"
 	s.Start(fs)
-	if err := s.StartNetListener("tcp", "127.0.0.1:7731"); err != nil {
+	if err := s.StartNetListener("tcp", c.ListenAddress); err != nil {
 		log.Fatal(err)
 	}
 }
