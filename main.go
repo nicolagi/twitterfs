@@ -20,6 +20,11 @@ var (
 	Esmall   = &p.Error{Err: "too small read size for dir entry", Errornum: p.EINVAL}
 	Eunknown = &p.Error{Err: "unknown command", Errornum: p.EINVAL}
 
+	// Let's find out right at start-up whether these type assertions fail.
+	Enoauth *p.Error = srv.Enoauth.(*p.Error)
+	Enotdir *p.Error = srv.Enotdir.(*p.Error)
+	Eperm   *p.Error = srv.Eperm.(*p.Error)
+
 	idStrExpr = regexp.MustCompile(`^[0-9]{8}[0-9]*$`)
 )
 
@@ -28,6 +33,11 @@ func newEIO(err error) *p.Error {
 		Errornum: p.EIO,
 		Err:      fmt.Sprintf("%+v", err), // Make the stacktrace visible.
 	}
+}
+
+func respondError(r *srv.Req, err *p.Error) {
+	log.Printf("Rerror: %v", err)
+	r.RespondError(err)
 }
 
 type fsOps struct {
@@ -54,7 +64,7 @@ func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 
 func (fs *fsOps) Attach(r *srv.Req) {
 	if r.Afid != nil {
-		r.RespondError(srv.Enoauth)
+		respondError(r, Enoauth)
 	} else {
 		r.Fid.Aux = fs.root
 		r.RespondRattach(&fs.root.dir.Qid)
@@ -98,7 +108,7 @@ func (fs *fsOps) Walk(r *srv.Req) {
 		if child, err := fs.walk1(n, name); (child == nil && err == nil) || err == srv.Enoent {
 			break
 		} else if err != nil {
-			r.RespondError(err)
+			respondError(r, err)
 			return
 		} else if child != nil {
 			n = child
@@ -108,7 +118,7 @@ func (fs *fsOps) Walk(r *srv.Req) {
 	// Per walk(9p), an error should be returned
 	// only if the very first name can't be walked.
 	if len(walked) == 0 && len(r.Tc.Wname) > 0 {
-		r.RespondError(srv.Enoent)
+		respondError(r, srv.Enoent)
 		return
 	}
 	r.Newfid.Aux = n
@@ -117,7 +127,7 @@ func (fs *fsOps) Walk(r *srv.Req) {
 
 func (fs *fsOps) walk1(parent *node, childName string) (child *node, err *p.Error) {
 	if parent.kind != rootKind && parent.kind != userKind {
-		return nil, srv.Enotdir.(*p.Error)
+		return nil, Enotdir
 	}
 	if err := fs.ensureLoaded(parent); err != nil {
 		return nil, newEIO(err)
@@ -157,13 +167,13 @@ func (fs *fsOps) Open(r *srv.Req) {
 }
 
 func (fs *fsOps) Create(r *srv.Req) {
-	r.RespondError(srv.Eperm)
+	respondError(r, Eperm)
 }
 
 func (fs *fsOps) Read(r *srv.Req) {
 	n := r.Fid.Aux.(*node)
 	if err := fs.ensureLoaded(n); err != nil {
-		r.RespondError(newEIO(err))
+		respondError(r, newEIO(err))
 		return
 	}
 	// All our files are small.
@@ -175,7 +185,7 @@ func (fs *fsOps) Read(r *srv.Req) {
 		if offset > 0 {
 			i := sort.SearchInts(n.boundaries, offset)
 			if i == len(n.boundaries) || n.boundaries[i] != offset {
-				r.RespondError(Eoff)
+				respondError(r, Eoff)
 				return
 			}
 		}
@@ -189,7 +199,7 @@ func (fs *fsOps) Read(r *srv.Req) {
 			}
 		}
 		if count < 0 {
-			r.RespondError(Esmall)
+			respondError(r, Esmall)
 			return
 		}
 		r.RespondRread(n.buffer[offset : offset+count])
@@ -205,14 +215,14 @@ func (fs *fsOps) Read(r *srv.Req) {
 			}
 		}
 	default:
-		r.RespondError(srv.Eperm)
+		respondError(r, Eperm)
 	}
 }
 
 func (fs *fsOps) Write(r *srv.Req) {
 	ctl := r.Fid.Aux.(*node)
 	if ctl.kind != controlKind {
-		r.RespondError(srv.Eperm)
+		respondError(r, Eperm)
 		return
 	}
 	n := ctl.parent
@@ -230,7 +240,7 @@ func (fs *fsOps) Write(r *srv.Req) {
 	} else if (n.kind == rootKind || n.kind == userKind) && cmd == "batch" && len(args) == 1 {
 		size, err := strconv.Atoi(args[0])
 		if err != nil {
-			r.RespondError(newEIO(err))
+			respondError(r, newEIO(err))
 		} else {
 			n.setBatchSize(size)
 			r.RespondRwrite(r.Tc.Count)
@@ -238,7 +248,7 @@ func (fs *fsOps) Write(r *srv.Req) {
 	} else if n.kind == userKind && cmd == "older" {
 		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, n.batchSize, "", n.minID)
 		if err != nil {
-			r.RespondError(newEIO(err))
+			respondError(r, newEIO(err))
 		} else {
 			n.addTimeline(timeline)
 			r.RespondRwrite(r.Tc.Count)
@@ -246,13 +256,13 @@ func (fs *fsOps) Write(r *srv.Req) {
 	} else if n.kind == userKind && cmd == "newer" {
 		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, n.batchSize, n.maxID, "")
 		if err != nil {
-			r.RespondError(newEIO(err))
+			respondError(r, newEIO(err))
 		} else {
 			n.addTimeline(timeline)
 			r.RespondRwrite(r.Tc.Count)
 		}
 	} else {
-		r.RespondError(Eunknown)
+		respondError(r, Eunknown)
 	}
 }
 
@@ -261,7 +271,7 @@ func (fs *fsOps) Clunk(r *srv.Req) {
 }
 
 func (fs *fsOps) Remove(r *srv.Req) {
-	r.RespondError(srv.Eperm)
+	respondError(r, Eperm)
 }
 
 func (fs *fsOps) Stat(r *srv.Req) {
@@ -269,7 +279,7 @@ func (fs *fsOps) Stat(r *srv.Req) {
 }
 
 func (fs *fsOps) Wstat(r *srv.Req) {
-	r.RespondError(srv.Eperm)
+	respondError(r, Eperm)
 }
 
 func newClient(c *fsConfig) *twittergo.Client {
