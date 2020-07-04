@@ -53,10 +53,6 @@ type node struct {
 	kind nodeKind
 	dir  p.Dir
 
-	// For the control node to know what node it controls (a user
-	// directory or the root directory).
-	parent *node
-
 	// For directory nodes, i.e., root and user nodes.
 	children map[string]*node
 
@@ -72,12 +68,9 @@ type node struct {
 	boundaries []int
 
 	// For user nodes to know the range of loaded tweets, and know what
-	// to do if requested to load older or newer tweets. The batch size
-	// is also a property of the root, so it can be changed at once for
-	// all users.
-	minID     string
-	maxID     string
-	batchSize int
+	// to do if requested to load older or newer tweets.
+	minID string
+	maxID string
 
 	// For root and user nodes. Caches error API responses. Shells do
 	// all sorts of lookups and we don't want to call Twitter for those.
@@ -124,11 +117,7 @@ func (n *node) cacheErrorResponse(childName string, err error) *p.Error {
 func (n *node) addChild(name string, mode uint32, kind nodeKind) *node {
 	child := new(node)
 	if n != nil {
-		child.parent = n
 		n.children[name] = child
-		child.batchSize = n.batchSize
-	} else {
-		child.batchSize = 10
 	}
 	child.kind = kind
 	child.dir.Name = name
@@ -148,9 +137,6 @@ func (n *node) addUser(u twitterUser) *node {
 	child := n.addChild(u.ScreenName, 0555|p.DMDIR, userKind)
 	child.dir.Mtime = u.Mtime()
 	child.dir.Atime = child.dir.Mtime
-	ctl := child.addChild("ctl", 0222, controlKind)
-	ctl.dir.Mtime = child.dir.Mtime
-	ctl.dir.Atime = child.dir.Mtime
 	return child
 }
 
@@ -189,21 +175,5 @@ func (n *node) prepareDirEntries() {
 		n.buffer = append(n.buffer, dent...)
 		end += len(dent)
 		n.boundaries = append(n.boundaries, end)
-	}
-}
-
-func (n *node) setBatchSize(size int) {
-	if n.kind != rootKind && n.kind != userKind {
-		// Tempted to panic: invariant violation.
-		return
-	}
-	n.batchSize = size
-	if n.kind == rootKind {
-		for _, child := range n.children {
-			// Not for control file.
-			if child.kind == userKind {
-				child.batchSize = size
-			}
-		}
 	}
 }

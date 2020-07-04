@@ -47,12 +47,16 @@ type fsOps struct {
 	// The below is only used to get the list of followed users.
 	// In turn, that's used for populating the root directory.
 	screenName string
+
+	//  The batch size determines how many tweets to load per-user.
+	batchSize int
 }
 
 func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 	fs := new(fsOps)
 	fs.client = client
 	fs.screenName = screenName
+	fs.batchSize = 10
 	fs.root = (*node)(nil).addChild("root", 0555|p.DMDIR, rootKind)
 	fs.root.dir.Mtime = uint32(time.Now().Unix())
 	fs.root.dir.Atime = fs.root.dir.Mtime
@@ -91,7 +95,7 @@ func (fs *fsOps) ensureLoaded(n *node) error {
 		n.prepareDirEntries()
 		n.loaded = true
 	case userKind:
-		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, n.batchSize, "", "")
+		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, "", "")
 		if err != nil {
 			return err
 		}
@@ -225,7 +229,6 @@ func (fs *fsOps) Write(r *srv.Req) {
 		respondError(r, Eperm)
 		return
 	}
-	n := ctl.parent
 	var cmd string
 	var args []string
 	if fields := strings.Fields(string(r.Tc.Data[:r.Tc.Count])); len(fields) > 1 {
@@ -234,28 +237,30 @@ func (fs *fsOps) Write(r *srv.Req) {
 	} else if len(fields) > 0 {
 		cmd = fields[0]
 	}
-	if n.kind == rootKind && cmd == "reload" {
-		n.loaded = false
+	if cmd == "reload" {
+		fs.root.loaded = false
 		r.RespondRwrite(r.Tc.Count)
-	} else if (n.kind == rootKind || n.kind == userKind) && cmd == "batch" && len(args) == 1 {
+	} else if cmd == "batch" && len(args) == 1 {
 		size, err := strconv.Atoi(args[0])
 		if err != nil {
 			respondError(r, newEIO(err))
 		} else {
-			n.setBatchSize(size)
+			fs.batchSize = size
 			r.RespondRwrite(r.Tc.Count)
 		}
-	} else if n.kind == userKind && cmd == "older" {
-		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, n.batchSize, "", n.minID)
-		if err != nil {
+	} else if cmd == "older" && len(args) == 1 {
+		if n := fs.root.children[args[0]]; n == nil {
+			respondError(r, newEIO(srv.Enoent))
+		} else if timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, "", n.minID); err != nil {
 			respondError(r, newEIO(err))
 		} else {
 			n.addTimeline(timeline)
 			r.RespondRwrite(r.Tc.Count)
 		}
-	} else if n.kind == userKind && cmd == "newer" {
-		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, n.batchSize, n.maxID, "")
-		if err != nil {
+	} else if cmd == "newer" && len(args) == 1 {
+		if n := fs.root.children[args[0]]; n == nil {
+			respondError(r, newEIO(srv.Enoent))
+		} else if timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, n.maxID, ""); err != nil {
 			respondError(r, newEIO(err))
 		} else {
 			n.addTimeline(timeline)
