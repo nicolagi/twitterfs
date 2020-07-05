@@ -252,9 +252,16 @@ func (fs *fsOps) Write(r *srv.Req) {
 	} else if len(fields) > 0 {
 		cmd = fields[0]
 	}
-	if cmd == "post" {
+	if cmd == "reply" && len(args) > 1 {
+		idStr := args[0]
 		// Don't use args, just strip the "post" and the separator.
-		if err := apiStatusesUpdate(fs.client, string(r.Tc.Data[5:])); err != nil {
+		if err := apiStatusesUpdate(fs.client, string(r.Tc.Data[6+len(idStr):]), idStr); err != nil {
+			respondError(r, newEIO(err))
+		}
+		r.RespondRwrite(r.Tc.Count)
+	} else if cmd == "post" && len(args) > 0 {
+		// Don't use args, just strip the "post" and the separator.
+		if err := apiStatusesUpdate(fs.client, string(r.Tc.Data[5:]), ""); err != nil {
 			respondError(r, newEIO(err))
 		}
 		r.RespondRwrite(r.Tc.Count)

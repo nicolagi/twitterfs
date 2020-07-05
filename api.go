@@ -61,10 +61,14 @@ func apiStatusesShow(client *twittergo.Client, idStr string) (twittergo.Tweet, e
 	return tweet, nil
 }
 
-func apiStatusesUpdate(client *twittergo.Client, text string) error {
+func apiStatusesUpdate(client *twittergo.Client, text string, inReply string) error {
 	const path = "https://api.twitter.com/1.1/statuses/update.json"
 	params := url.Values{}
 	params.Set("status", text)
+	if inReply != "" {
+		params.Set("in_reply_to_status_id", inReply)
+		params.Set("auto_populate_reply_metadata", "true")
+	}
 	request, err := http.NewRequest(http.MethodPost, path+"?"+params.Encode(), nil)
 	if err != nil {
 		return errors.WithStack(err)
