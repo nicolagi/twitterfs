@@ -61,6 +61,21 @@ func apiStatusesShow(client *twittergo.Client, idStr string) (twittergo.Tweet, e
 	return tweet, nil
 }
 
+func apiStatusesUpdate(client *twittergo.Client, text string) error {
+	const path = "https://api.twitter.com/1.1/statuses/update.json"
+	params := url.Values{}
+	params.Set("status", text)
+	request, err := http.NewRequest(http.MethodPost, path+"?"+params.Encode(), nil)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = client.SendRequest(request)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
 func apiFriendsList(client *twittergo.Client, followerScreenName string) ([]twitterUser, error) {
 	const path = "/1.1/friends/list.json"
 	params := url.Values{}

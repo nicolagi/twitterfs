@@ -252,7 +252,13 @@ func (fs *fsOps) Write(r *srv.Req) {
 	} else if len(fields) > 0 {
 		cmd = fields[0]
 	}
-	if cmd == "reload" {
+	if cmd == "post" {
+		// Don't use args, just strip the "post" and the separator.
+		if err := apiStatusesUpdate(fs.client, string(r.Tc.Data[5:])); err != nil {
+			respondError(r, newEIO(err))
+		}
+		r.RespondRwrite(r.Tc.Count)
+	} else if cmd == "reload" {
 		fs.root.loaded = false
 		r.RespondRwrite(r.Tc.Count)
 	} else if cmd == "batch" && len(args) == 1 {
