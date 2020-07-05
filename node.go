@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -41,6 +42,7 @@ const (
 	userKind
 	tweetKind
 	controlKind
+	orphanedKind
 )
 
 type cachedErr struct {
@@ -148,6 +150,7 @@ func (n *node) addTweet(tweet twittergo.Tweet) *node {
 	child.dir.Atime = child.dir.Mtime
 	return child
 }
+
 func (n *node) addTimeline(timeline twittergo.Timeline) {
 	for _, tweet := range timeline {
 		idStr := tweet.IdStr()
@@ -176,4 +179,31 @@ func (n *node) prepareDirEntries() {
 		end += len(dent)
 		n.boundaries = append(n.boundaries, end)
 	}
+}
+
+type byModified []*node
+
+func (nodes byModified) Len() int { return len(nodes) }
+
+func (nodes byModified) Less(a, b int) bool { return nodes[a].dir.Mtime > nodes[b].dir.Mtime }
+
+func (nodes byModified) Swap(a, b int) { nodes[a], nodes[b] = nodes[b], nodes[a] }
+
+func (n *node) trim(size int) {
+	if n.kind != userKind {
+		return
+	}
+	if len(n.children) <= size {
+		return
+	}
+	var tweets []*node
+	for _, tweet := range n.children {
+		tweets = append(tweets, tweet)
+	}
+	sort.Sort(byModified(tweets))
+	for i := size; i < len(tweets); i++ {
+		tweets[i].kind = orphanedKind
+		delete(n.children, tweets[i].dir.Name)
+	}
+	n.prepareDirEntries()
 }

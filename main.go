@@ -13,12 +13,14 @@ import (
 	"github.com/kurrik/twittergo"
 	"github.com/lionkov/go9p/p"
 	"github.com/lionkov/go9p/p/srv"
+	"github.com/pkg/errors"
 )
 
 var (
-	Eoff     = &p.Error{Err: "invalid dir read offset", Errornum: p.EINVAL}
-	Esmall   = &p.Error{Err: "too small read size for dir entry", Errornum: p.EINVAL}
-	Eunknown = &p.Error{Err: "unknown command", Errornum: p.EINVAL}
+	Eoff      = &p.Error{Err: "invalid dir read offset", Errornum: p.EINVAL}
+	Esmall    = &p.Error{Err: "too small read size for dir entry", Errornum: p.EINVAL}
+	Eunknown  = &p.Error{Err: "unknown command", Errornum: p.EINVAL}
+	Eorphaned = &p.Error{Err: "node was orphaned", Errornum: p.EINVAL}
 
 	// Let's find out right at start-up whether these type assertions fail.
 	Enoauth *p.Error = srv.Enoauth.(*p.Error)
@@ -108,6 +110,10 @@ func (fs *fsOps) ensureLoaded(n *node) error {
 func (fs *fsOps) Walk(r *srv.Req) {
 	var walked []p.Qid
 	n := r.Fid.Aux.(*node)
+	if n.kind == orphanedKind {
+		respondError(r, Eorphaned)
+		return
+	}
 	for _, name := range r.Tc.Wname {
 		if child, err := fs.walk1(n, name); (child == nil && err == nil) || err == srv.Enoent {
 			break
@@ -167,7 +173,12 @@ func (fs *fsOps) walk1(parent *node, childName string) (child *node, err *p.Erro
 }
 
 func (fs *fsOps) Open(r *srv.Req) {
-	r.RespondRopen(&r.Fid.Aux.(*node).dir.Qid, 0)
+	n := r.Fid.Aux.(*node)
+	if n.kind == orphanedKind {
+		respondError(r, Eorphaned)
+		return
+	}
+	r.RespondRopen(&n.dir.Qid, 0)
 }
 
 func (fs *fsOps) Create(r *srv.Req) {
@@ -176,6 +187,10 @@ func (fs *fsOps) Create(r *srv.Req) {
 
 func (fs *fsOps) Read(r *srv.Req) {
 	n := r.Fid.Aux.(*node)
+	if n.kind == orphanedKind {
+		respondError(r, Eorphaned)
+		return
+	}
 	if err := fs.ensureLoaded(n); err != nil {
 		respondError(r, newEIO(err))
 		return
@@ -266,6 +281,23 @@ func (fs *fsOps) Write(r *srv.Req) {
 			n.addTimeline(timeline)
 			r.RespondRwrite(r.Tc.Count)
 		}
+	} else if cmd == "trim" && len(args) == 2 {
+		desiredLength, err := strconv.Atoi(args[1])
+		if err != nil {
+			respondError(r, newEIO(errors.Errorf("%q: %v", args[1], err)))
+			return
+		}
+		if desiredLength < 0 {
+			respondError(r, newEIO(errors.Errorf("%q: can't trim to negative size", args[1])))
+			return
+		}
+		userNode := fs.root.children[args[0]]
+		if userNode == nil {
+			respondError(r, newEIO(srv.Enoent))
+			return
+		}
+		userNode.trim(desiredLength)
+		r.RespondRwrite(r.Tc.Count)
 	} else {
 		respondError(r, Eunknown)
 	}
@@ -280,7 +312,12 @@ func (fs *fsOps) Remove(r *srv.Req) {
 }
 
 func (fs *fsOps) Stat(r *srv.Req) {
-	r.RespondRstat(&r.Fid.Aux.(*node).dir)
+	n := r.Fid.Aux.(*node)
+	if n.kind == orphanedKind {
+		respondError(r, Eorphaned)
+		return
+	}
+	r.RespondRstat(&n.dir)
 }
 
 func (fs *fsOps) Wstat(r *srv.Req) {
