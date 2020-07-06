@@ -118,6 +118,7 @@ func apiStatusesHomeTimeline(client *twittergo.Client, batchSize int, sinceID st
 	const path = "https://api.twitter.com/1.1/statuses/home_timeline.json"
 	params := url.Values{}
 	params.Set("include_entities", "true")
+	params.Set("tweet_mode", "extended")
 	if sinceID != "" {
 		params.Set("since_id", sinceID)
 	}
@@ -144,6 +145,7 @@ func apiStatusesHomeTimeline(client *twittergo.Client, batchSize int, sinceID st
 func apiStatusesMentionsTimeline(client *twittergo.Client, batchSize int, sinceID string, maxID string) (twittergo.Timeline, error) {
 	const path = "https://api.twitter.com/1.1/statuses/mentions_timeline.json"
 	params := url.Values{}
+	params.Set("tweet_mode", "extended")
 	params.Set("include_entities", "true")
 	if sinceID != "" {
 		params.Set("since_id", sinceID)
