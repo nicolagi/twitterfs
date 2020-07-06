@@ -38,7 +38,7 @@ func newEIO(err error) *p.Error {
 }
 
 func respondError(r *srv.Req, err *p.Error) {
-	log.Printf("Rerror: %v", err)
+	log.Printf("%v — Rerror: %v", r.Tc, err)
 	r.RespondError(err)
 }
 
@@ -50,13 +50,15 @@ type fsOps struct {
 	// In turn, that's used for populating the root directory.
 	screenName string
 
-	//  The batch size determines how many tweets to load per-user.
+	//  The batch size determines how many tweets to load at a time for a user,
+	// or for the home or mentions timelines.
 	batchSize int
 }
 
 func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 	fs := new(fsOps)
 	fs.client = client
+	// TODO: This shouldn't be needed.
 	fs.screenName = screenName
 	fs.batchSize = 10
 	fs.root = (*node)(nil).addChild("root", 0555|p.DMDIR, rootKind)
@@ -65,6 +67,9 @@ func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 	ctl := fs.root.addChild("ctl", 0220, controlKind)
 	ctl.dir.Mtime = fs.root.dir.Mtime
 	ctl.dir.Atime = fs.root.dir.Mtime
+	mentions := fs.root.addChild("mentions", 0555|p.DMDIR, mentionsKind)
+	mentions.dir.Mtime = fs.root.dir.Mtime
+	mentions.dir.Atime = fs.root.dir.Mtime
 	return fs
 }
 
@@ -82,6 +87,13 @@ func (fs *fsOps) ensureLoaded(n *node) error {
 		return nil
 	}
 	switch n.kind {
+	case mentionsKind:
+		timeline, err := apiStatusesMentionsTimeline(fs.client, fs.batchSize, "", "")
+		if err != nil {
+			return err
+		}
+		n.addTimeline(timeline)
+		n.loaded = true
 	case rootKind:
 		followed, err := apiFriendsList(fs.client, fs.screenName)
 		if err != nil {
@@ -136,13 +148,13 @@ func (fs *fsOps) Walk(r *srv.Req) {
 }
 
 func (fs *fsOps) walk1(parent *node, childName string) (child *node, err *p.Error) {
-	if parent.kind != rootKind && parent.kind != userKind {
+	if parent.dir.Mode&p.DMDIR == 0 {
 		return nil, Enotdir
 	}
 	if err := fs.ensureLoaded(parent); err != nil {
 		return nil, newEIO(err)
 	}
-	if parent.kind == userKind && childName == ".." {
+	if (parent.kind == userKind || parent.kind == mentionsKind) && childName == ".." {
 		return fs.root, nil
 	}
 	if child, ok := parent.children[childName]; ok {
@@ -199,7 +211,7 @@ func (fs *fsOps) Read(r *srv.Req) {
 	offset := int(r.Tc.Offset)
 	count := int(r.Tc.Count)
 	switch n.kind {
-	case rootKind, userKind:
+	case mentionsKind, userKind, rootKind:
 		// The offset must be the end of one of the dir entries.
 		if offset > 0 {
 			i := sort.SearchInts(n.boundaries, offset)
@@ -277,6 +289,7 @@ func (fs *fsOps) Write(r *srv.Req) {
 			r.RespondRwrite(r.Tc.Count)
 		}
 	} else if cmd == "older" && len(args) == 1 {
+		// TODO: won't work for mentions.
 		if n := fs.root.children[args[0]]; n == nil {
 			respondError(r, newEIO(srv.Enoent))
 		} else if timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, "", n.minID); err != nil {
@@ -286,6 +299,7 @@ func (fs *fsOps) Write(r *srv.Req) {
 			r.RespondRwrite(r.Tc.Count)
 		}
 	} else if cmd == "newer" && len(args) == 1 {
+		// TODO: won't work for mentions.
 		if n := fs.root.children[args[0]]; n == nil {
 			respondError(r, newEIO(srv.Enoent))
 		} else if timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, n.maxID, ""); err != nil {
@@ -295,6 +309,7 @@ func (fs *fsOps) Write(r *srv.Req) {
 			r.RespondRwrite(r.Tc.Count)
 		}
 	} else if cmd == "trim" && len(args) == 2 {
+		// TODO: won't work for mentions.
 		desiredLength, err := strconv.Atoi(args[1])
 		if err != nil {
 			respondError(r, newEIO(errors.Errorf("%q: %v", args[1], err)))

@@ -78,7 +78,7 @@ func formatTweet(currentUser string, tweet twittergo.Tweet) []byte {
 	_, _ = fmt.Fprintf(
 		&text,
 		"@%s — %s — %s\n",
-		currentUser,
+		strings.ToLower(tweet.User().ScreenName()),
 		tweet.CreatedAt().Format(time.RFC3339),
 		content,
 	)

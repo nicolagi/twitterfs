@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -43,6 +44,7 @@ const (
 	tweetKind
 	controlKind
 	orphanedKind
+	mentionsKind
 )
 
 type cachedErr struct {
@@ -55,29 +57,30 @@ type node struct {
 	kind nodeKind
 	dir  p.Dir
 
-	// For directory nodes, i.e., root and user nodes.
+	// For directory nodes, i.e., root and timelines (user, home, mentions) nodes.
 	children map[string]*node
 
-	// For root and user nodes. Has the initial list of followed user
-	// been loaded? Has the initial list of tweets been loaded?
+	// For root and timeline (user, home, mentions) nodes. Has the
+	// initial list of followed user been loaded? Has the initial list
+	// of tweets been loaded?
 	loaded bool
 
-	// Serialized directory entries for root and user nodes, formatted
-	// tweet for tweet nodes.
+	// Serialized directory entries for root and timeline (user, home,
+	// mentions) nodes; formatted tweet for tweet nodes.
 	buffer []byte
 
 	// Directory entry boundaries, for root and user nodes (directory nodes).
 	boundaries []int
 
-	// For user nodes to know the range of loaded tweets, and know what
-	// to do if requested to load older or newer tweets.
+	// For timeline nodes to know the range of loaded tweets, and know
+	// what to do if requested to load older or newer tweets.
 	minID string
 	maxID string
 
-	// For root and user nodes. Caches error API responses. Shells do
-	// all sorts of lookups and we don't want to call Twitter for those.
-	// At least, not too often. (In addition, we avoid calling APIs with
-	// non-numeric ids for tweets.)
+	// For root and timeline nodes. Caches error API responses. Shells
+	// do all sorts of lookups and we don't want to call Twitter for
+	// those. At least, not too often. (In addition, we avoid calling
+	// APIs with non-numeric ids for tweets.)
 	errors map[string]cachedErr
 }
 
@@ -152,6 +155,10 @@ func (n *node) addTweet(tweet twittergo.Tweet) *node {
 }
 
 func (n *node) addTimeline(timeline twittergo.Timeline) {
+	if n.kind != userKind && n.kind != mentionsKind {
+		log.Printf("fixme: addTimeline() called for wrong kind: %v", n.kind)
+		return
+	}
 	for _, tweet := range timeline {
 		idStr := tweet.IdStr()
 		if n.minID == "" || n.minID > idStr {
