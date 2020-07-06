@@ -61,6 +61,9 @@ func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 	ctl := fs.root.addChild("ctl", 0220, controlKind)
 	ctl.dir.Mtime = fs.root.dir.Mtime
 	ctl.dir.Atime = fs.root.dir.Mtime
+	home := fs.root.addChild("home", 0555|p.DMDIR, homeKind)
+	home.dir.Mtime = fs.root.dir.Mtime
+	home.dir.Atime = fs.root.dir.Mtime
 	mentions := fs.root.addChild("mentions", 0555|p.DMDIR, mentionsKind)
 	mentions.dir.Mtime = fs.root.dir.Mtime
 	mentions.dir.Atime = fs.root.dir.Mtime
@@ -86,6 +89,13 @@ func (fs *fsOps) ensureLoaded(n *node) error {
 		return nil
 	}
 	switch n.kind {
+	case homeKind:
+		timeline, err := apiStatusesHomeTimeline(fs.client, fs.batchSize, "", "")
+		if err != nil {
+			return err
+		}
+		n.addTimeline(timeline)
+		n.loaded = true
 	case mentionsKind:
 		timeline, err := apiStatusesMentionsTimeline(fs.client, fs.batchSize, "", "")
 		if err != nil {
@@ -303,6 +313,8 @@ func (fs *fsOps) Write(r *srv.Req) {
 		var dest *node
 		if args[0][0] == '@' {
 			dest = fs.root.children["users"].children[args[0][1:]]
+		} else if args[0] == "home" {
+			dest = fs.root.children["home"]
 		} else if args[0] == "mentions" {
 			dest = fs.root.children["mentions"]
 		}
@@ -315,6 +327,8 @@ func (fs *fsOps) Write(r *srv.Req) {
 		var err error
 		if args[0][0] == '@' {
 			timeline, err = apiStatusesUserTimeline(fs.client, dest.dir.Name, fs.batchSize, "", dest.minID)
+		} else if args[0] == "home" {
+			timeline, err = apiStatusesHomeTimeline(fs.client, fs.batchSize, "", dest.minID)
 		} else if args[0] == "mentions" {
 			timeline, err = apiStatusesMentionsTimeline(fs.client, fs.batchSize, "", dest.minID)
 		}
@@ -328,6 +342,8 @@ func (fs *fsOps) Write(r *srv.Req) {
 		var dest *node
 		if args[0][0] == '@' {
 			dest = fs.root.children["users"].children[args[0][1:]]
+		} else if args[0] == "home" {
+			dest = fs.root.children["home"]
 		} else if args[0] == "mentions" {
 			dest = fs.root.children["mentions"]
 		}
@@ -340,6 +356,8 @@ func (fs *fsOps) Write(r *srv.Req) {
 		var err error
 		if args[0][0] == '@' {
 			timeline, err = apiStatusesUserTimeline(fs.client, dest.dir.Name, fs.batchSize, dest.maxID, "")
+		} else if args[0] == "home" {
+			timeline, err = apiStatusesHomeTimeline(fs.client, fs.batchSize, dest.maxID, "")
 		} else if args[0] == "mentions" {
 			timeline, err = apiStatusesMentionsTimeline(fs.client, fs.batchSize, dest.maxID, "")
 		}
@@ -362,6 +380,8 @@ func (fs *fsOps) Write(r *srv.Req) {
 		var dest *node
 		if args[0][0] == '@' {
 			dest = fs.root.children["users"].children[args[0][1:]]
+		} else if args[0] == "home" {
+			dest = fs.root.children["home"]
 		} else if args[0] == "mentions" {
 			dest = fs.root.children["mentions"]
 		}

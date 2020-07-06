@@ -114,10 +114,9 @@ more:
 	return users, nil
 }
 
-func apiStatusesMentionsTimeline(client *twittergo.Client, batchSize int, sinceID string, maxID string) (twittergo.Timeline, error) {
-	const path = "https://api.twitter.com/1.1/statuses/mentions_timeline.json"
+func apiStatusesHomeTimeline(client *twittergo.Client, batchSize int, sinceID string, maxID string) (twittergo.Timeline, error) {
+	const path = "https://api.twitter.com/1.1/statuses/home_timeline.json"
 	params := url.Values{}
-	params.Set("count", strconv.Itoa(batchSize))
 	params.Set("include_entities", "true")
 	if sinceID != "" {
 		params.Set("since_id", sinceID)
@@ -126,6 +125,34 @@ func apiStatusesMentionsTimeline(client *twittergo.Client, batchSize int, sinceI
 		params.Set("max_id", maxID)
 		batchSize++
 	}
+	params.Set("count", strconv.Itoa(batchSize))
+	request, err := http.NewRequest(http.MethodGet, path+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	response, err := client.SendRequest(request)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	var timeline twittergo.Timeline
+	if err := response.Parse(&timeline); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return timeline, nil
+}
+
+func apiStatusesMentionsTimeline(client *twittergo.Client, batchSize int, sinceID string, maxID string) (twittergo.Timeline, error) {
+	const path = "https://api.twitter.com/1.1/statuses/mentions_timeline.json"
+	params := url.Values{}
+	params.Set("include_entities", "true")
+	if sinceID != "" {
+		params.Set("since_id", sinceID)
+	}
+	if maxID != "" {
+		params.Set("max_id", maxID)
+		batchSize++
+	}
+	params.Set("count", strconv.Itoa(batchSize))
 	request, err := http.NewRequest(http.MethodGet, path+"?"+params.Encode(), nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
