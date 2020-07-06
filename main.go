@@ -46,10 +46,6 @@ type fsOps struct {
 	client *twittergo.Client
 	root   *node
 
-	// The below is only used to get the list of followed users.
-	// In turn, that's used for populating the root directory.
-	screenName string
-
 	//  The batch size determines how many tweets to load at a time for a user,
 	// or for the home or mentions timelines.
 	batchSize int
@@ -58,8 +54,6 @@ type fsOps struct {
 func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 	fs := new(fsOps)
 	fs.client = client
-	// TODO: This shouldn't be needed.
-	fs.screenName = screenName
 	fs.batchSize = 10
 	fs.root = (*node)(nil).addChild("root", 0555|p.DMDIR, rootKind)
 	fs.root.dir.Mtime = uint32(time.Now().Unix())
@@ -70,6 +64,11 @@ func newFileSystemOps(client *twittergo.Client, screenName string) *fsOps {
 	mentions := fs.root.addChild("mentions", 0555|p.DMDIR, mentionsKind)
 	mentions.dir.Mtime = fs.root.dir.Mtime
 	mentions.dir.Atime = fs.root.dir.Mtime
+	users := fs.root.addChild("users", 0555|p.DMDIR, usersKind)
+	users.dir.Mtime = fs.root.dir.Mtime
+	users.dir.Atime = fs.root.dir.Mtime
+	fs.root.prepareDirEntries()
+	fs.root.loaded = true
 	return fs
 }
 
@@ -94,8 +93,15 @@ func (fs *fsOps) ensureLoaded(n *node) error {
 		}
 		n.addTimeline(timeline)
 		n.loaded = true
-	case rootKind:
-		followed, err := apiFriendsList(fs.client, fs.screenName)
+	case userKind:
+		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, "", "")
+		if err != nil {
+			return err
+		}
+		n.addTimeline(timeline)
+		n.loaded = true
+	case usersKind:
+		followed, err := apiFriendsList(fs.client)
 		if err != nil {
 			return err
 		}
@@ -107,13 +113,6 @@ func (fs *fsOps) ensureLoaded(n *node) error {
 			}
 		}
 		n.prepareDirEntries()
-		n.loaded = true
-	case userKind:
-		timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, "", "")
-		if err != nil {
-			return err
-		}
-		n.addTimeline(timeline)
 		n.loaded = true
 	}
 	return nil
@@ -147,6 +146,18 @@ func (fs *fsOps) Walk(r *srv.Req) {
 	r.RespondRwalk(walked)
 }
 
+func (fs *fsOps) walkdd(parent *node) (child *node, err *p.Error) {
+	switch parent.kind {
+	case homeKind, mentionsKind, usersKind:
+		return fs.root, nil
+	case userKind:
+		return fs.root.children["users"], nil
+	default:
+		log.Printf("fixme: walkdd() for node of kind %v", parent.kind)
+		return nil, srv.Enoent
+	}
+}
+
 func (fs *fsOps) walk1(parent *node, childName string) (child *node, err *p.Error) {
 	if parent.dir.Mode&p.DMDIR == 0 {
 		return nil, Enotdir
@@ -154,8 +165,8 @@ func (fs *fsOps) walk1(parent *node, childName string) (child *node, err *p.Erro
 	if err := fs.ensureLoaded(parent); err != nil {
 		return nil, newEIO(err)
 	}
-	if (parent.kind == userKind || parent.kind == mentionsKind) && childName == ".." {
-		return fs.root, nil
+	if childName == ".." {
+		return fs.walkdd(parent)
 	}
 	if child, ok := parent.children[childName]; ok {
 		return child, nil
@@ -167,7 +178,7 @@ func (fs *fsOps) walk1(parent *node, childName string) (child *node, err *p.Erro
 			delete(parent.errors, childName)
 		}
 	}
-	if parent.kind == rootKind {
+	if parent.kind == usersKind {
 		if user, err := apiUsersShow(fs.client, childName); err != nil {
 			return nil, parent.cacheErrorResponse(childName, err)
 		} else {
@@ -211,7 +222,7 @@ func (fs *fsOps) Read(r *srv.Req) {
 	offset := int(r.Tc.Offset)
 	count := int(r.Tc.Count)
 	switch n.kind {
-	case mentionsKind, userKind, rootKind:
+	case homeKind, mentionsKind, userKind, usersKind, rootKind:
 		// The offset must be the end of one of the dir entries.
 		if offset > 0 {
 			i := sort.SearchInts(n.boundaries, offset)
@@ -289,27 +300,56 @@ func (fs *fsOps) Write(r *srv.Req) {
 			r.RespondRwrite(r.Tc.Count)
 		}
 	} else if cmd == "older" && len(args) == 1 {
-		// TODO: won't work for mentions.
-		if n := fs.root.children[args[0]]; n == nil {
-			respondError(r, newEIO(srv.Enoent))
-		} else if timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, "", n.minID); err != nil {
-			respondError(r, newEIO(err))
-		} else {
-			n.addTimeline(timeline)
-			r.RespondRwrite(r.Tc.Count)
+		var dest *node
+		if args[0][0] == '@' {
+			dest = fs.root.children["users"].children[args[0][1:]]
+		} else if args[0] == "mentions" {
+			dest = fs.root.children["mentions"]
 		}
+		if dest == nil {
+			// In particular of args[0] does not start with '@' and is not "mentions".
+			respondError(r, newEIO(srv.Enoent))
+			return
+		}
+		var timeline twittergo.Timeline
+		var err error
+		if args[0][0] == '@' {
+			timeline, err = apiStatusesUserTimeline(fs.client, dest.dir.Name, fs.batchSize, "", dest.minID)
+		} else if args[0] == "mentions" {
+			timeline, err = apiStatusesMentionsTimeline(fs.client, fs.batchSize, "", dest.minID)
+		}
+		if err != nil {
+			respondError(r, newEIO(err))
+			return
+		}
+		dest.addTimeline(timeline)
+		r.RespondRwrite(r.Tc.Count)
 	} else if cmd == "newer" && len(args) == 1 {
-		// TODO: won't work for mentions.
-		if n := fs.root.children[args[0]]; n == nil {
-			respondError(r, newEIO(srv.Enoent))
-		} else if timeline, err := apiStatusesUserTimeline(fs.client, n.dir.Name, fs.batchSize, n.maxID, ""); err != nil {
-			respondError(r, newEIO(err))
-		} else {
-			n.addTimeline(timeline)
-			r.RespondRwrite(r.Tc.Count)
+		var dest *node
+		if args[0][0] == '@' {
+			dest = fs.root.children["users"].children[args[0][1:]]
+		} else if args[0] == "mentions" {
+			dest = fs.root.children["mentions"]
 		}
+		if dest == nil {
+			// In particular of args[0] does not start with '@' and is not "mentions".
+			respondError(r, newEIO(srv.Enoent))
+			return
+		}
+		var timeline twittergo.Timeline
+		var err error
+		if args[0][0] == '@' {
+			timeline, err = apiStatusesUserTimeline(fs.client, dest.dir.Name, fs.batchSize, dest.maxID, "")
+		} else if args[0] == "mentions" {
+			timeline, err = apiStatusesMentionsTimeline(fs.client, fs.batchSize, dest.maxID, "")
+		}
+		if err != nil {
+			respondError(r, newEIO(err))
+			return
+		}
+		dest.addTimeline(timeline)
+		r.RespondRwrite(r.Tc.Count)
 	} else if cmd == "trim" && len(args) == 2 {
-		// TODO: won't work for mentions.
 		desiredLength, err := strconv.Atoi(args[1])
 		if err != nil {
 			respondError(r, newEIO(errors.Errorf("%q: %v", args[1], err)))
@@ -319,12 +359,18 @@ func (fs *fsOps) Write(r *srv.Req) {
 			respondError(r, newEIO(errors.Errorf("%q: can't trim to negative size", args[1])))
 			return
 		}
-		userNode := fs.root.children[args[0]]
-		if userNode == nil {
+		var dest *node
+		if args[0][0] == '@' {
+			dest = fs.root.children["users"].children[args[0][1:]]
+		} else if args[0] == "mentions" {
+			dest = fs.root.children["mentions"]
+		}
+		if dest == nil {
+			// In particular of args[0] does not start with '@' and is not "mentions".
 			respondError(r, newEIO(srv.Enoent))
 			return
 		}
-		userNode.trim(desiredLength)
+		dest.trim(desiredLength)
 		r.RespondRwrite(r.Tc.Count)
 	} else {
 		respondError(r, Eunknown)

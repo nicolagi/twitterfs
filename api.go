@@ -80,13 +80,12 @@ func apiStatusesUpdate(client *twittergo.Client, text string, inReply string) er
 	return nil
 }
 
-func apiFriendsList(client *twittergo.Client, followerScreenName string) ([]twitterUser, error) {
+func apiFriendsList(client *twittergo.Client) ([]twitterUser, error) {
 	const path = "/1.1/friends/list.json"
 	params := url.Values{}
 	params.Set("count", "200")
 	params.Set("skip_status", "true")
 	params.Set("include_user_entities", "false")
-	params.Set("screen_name", followerScreenName)
 	var users []twitterUser
 more:
 	request, err := http.NewRequest(http.MethodGet, path+"?"+params.Encode(), nil)

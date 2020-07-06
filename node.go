@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -39,13 +40,38 @@ func init() {
 type nodeKind int
 
 const (
-	rootKind nodeKind = iota
-	userKind
-	tweetKind
-	controlKind
-	orphanedKind
-	mentionsKind
+	controlKind  nodeKind = iota // /ctl — the control node for sending commands
+	homeKind                     // /home — the home timeline, a listing of tweets
+	mentionsKind                 // /mentions — the tweets that mentioned the authenticated user
+	orphanedKind                 // a tweet that's been trimmed — not linked into the fs
+	rootKind                     // / — the root
+	tweetKind                    // /mentions/1234 or /users/janet/1234 or /home/1234 — a tweet
+	userKind                     // /users/janet — @janet's timeline
+	usersKind                    // /users — user listing, lazily loaded, starting from followed users
 )
+
+func (k nodeKind) String() string {
+	switch k {
+	case controlKind:
+		return "control"
+	case homeKind:
+		return "home-timeline"
+	case mentionsKind:
+		return "mentions-timeline"
+	case orphanedKind:
+		return "orphaned"
+	case rootKind:
+		return "root"
+	case tweetKind:
+		return "tweet"
+	case userKind:
+		return "user-timeline"
+	case usersKind:
+		return "users"
+	default:
+		return fmt.Sprintf("nodeKind%d", k)
+	}
+}
 
 type cachedErr struct {
 	until time.Time
@@ -57,31 +83,33 @@ type node struct {
 	kind nodeKind
 	dir  p.Dir
 
-	// For directory nodes, i.e., root and timelines (user, home, mentions) nodes.
+	// For directory nodes, i.e., root node, home node, mentions node,
+	// users node, and user timeline nodes.
 	children map[string]*node
 
-	// For root and timeline (user, home, mentions) nodes. Has the
-	// initial list of followed user been loaded? Has the initial list
-	// of tweets been loaded?
+	// For directory nodes that need to call Twitter APIs, i.e., all
+	// timeline nodes, and the users node. Caches error API responses.
+	// Shells do all sorts of lookups and we don't want to call Twitter
+	// for those. At least, not too often. (In addition, we avoid
+	// calling APIs with non-numeric ids for tweets.)
+	errors map[string]cachedErr
+
+	// For lazily loaded directory nodes (users node, timeline nodes).
+	// Has the initial list of followed user been loaded? Has the
+	// initial list of tweets been loaded?
 	loaded bool
 
-	// Serialized directory entries for root and timeline (user, home,
-	// mentions) nodes; formatted tweet for tweet nodes.
+	// Serialized directory entries for directory nodes;
+	// formatted tweet for tweet nodes.
 	buffer []byte
 
-	// Directory entry boundaries, for root and user nodes (directory nodes).
+	// Directory entry boundaries, for directory nodes.
 	boundaries []int
 
 	// For timeline nodes to know the range of loaded tweets, and know
 	// what to do if requested to load older or newer tweets.
 	minID string
 	maxID string
-
-	// For root and timeline nodes. Caches error API responses. Shells
-	// do all sorts of lookups and we don't want to call Twitter for
-	// those. At least, not too often. (In addition, we avoid calling
-	// APIs with non-numeric ids for tweets.)
-	errors map[string]cachedErr
 }
 
 func isNotFound(err error) bool {
@@ -120,6 +148,10 @@ func (n *node) cacheErrorResponse(childName string, err error) *p.Error {
 }
 
 func (n *node) addChild(name string, mode uint32, kind nodeKind) *node {
+	if n != nil && n.dir.Mode&p.DMDIR == 0 {
+		log.Printf("fixme: addChild() called for node of kind %v which is not a directory", n.kind)
+		return nil
+	}
 	child := new(node)
 	if n != nil {
 		n.children[name] = child
@@ -139,6 +171,10 @@ func (n *node) addChild(name string, mode uint32, kind nodeKind) *node {
 }
 
 func (n *node) addUser(u twitterUser) *node {
+	if n.kind != usersKind {
+		log.Printf("fixme: addUser() called for node of kind %v", n.kind)
+		return nil
+	}
 	child := n.addChild(u.ScreenName, 0555|p.DMDIR, userKind)
 	child.dir.Mtime = u.Mtime()
 	child.dir.Atime = child.dir.Mtime
@@ -146,6 +182,10 @@ func (n *node) addUser(u twitterUser) *node {
 }
 
 func (n *node) addTweet(tweet twittergo.Tweet) *node {
+	if n.kind != homeKind && n.kind != mentionsKind && n.kind != userKind {
+		log.Printf("fixme: addTweet() called for node of kind %v", n.kind)
+		return nil
+	}
 	child := n.addChild(tweet.IdStr(), 0444, tweetKind)
 	child.buffer = formatTweet(n.dir.Name, tweet)
 	child.dir.Length = uint64(len(child.buffer))
@@ -155,8 +195,8 @@ func (n *node) addTweet(tweet twittergo.Tweet) *node {
 }
 
 func (n *node) addTimeline(timeline twittergo.Timeline) {
-	if n.kind != userKind && n.kind != mentionsKind {
-		log.Printf("fixme: addTimeline() called for wrong kind: %v", n.kind)
+	if n.kind != homeKind && n.kind != mentionsKind && n.kind != userKind {
+		log.Printf("fixme: addTimeline() called for node of kind: %v", n.kind)
 		return
 	}
 	for _, tweet := range timeline {
@@ -197,10 +237,18 @@ func (nodes byModified) Less(a, b int) bool { return nodes[a].dir.Mtime > nodes[
 func (nodes byModified) Swap(a, b int) { nodes[a], nodes[b] = nodes[b], nodes[a] }
 
 func (n *node) trim(size int) {
-	if n.kind != userKind {
+	if n.kind != homeKind && n.kind != mentionsKind && n.kind != userKind {
+		log.Printf("fixme: trim() called for node of kind: %v", n.kind)
 		return
 	}
 	if len(n.children) <= size {
+		return
+	}
+	if size == 0 {
+		n.children = make(map[string]*node)
+		n.minID = ""
+		n.maxID = ""
+		n.prepareDirEntries()
 		return
 	}
 	var tweets []*node
@@ -208,6 +256,7 @@ func (n *node) trim(size int) {
 		tweets = append(tweets, tweet)
 	}
 	sort.Sort(byModified(tweets))
+	n.minID = tweets[size-1].dir.Name
 	for i := size; i < len(tweets); i++ {
 		tweets[i].kind = orphanedKind
 		delete(n.children, tweets[i].dir.Name)
